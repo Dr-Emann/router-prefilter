@@ -29,6 +29,7 @@ use regex_syntax::hir::{Hir, literal};
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::mem;
+use bstr::BString;
 
 /// Describes a pattern matcher that can be analyzed for prefix extraction.
 ///
@@ -69,8 +70,8 @@ impl<M: Matcher> Matcher for &M {
 
 #[derive(Debug)]
 struct Frame {
-    and_literal_prefixes: Option<BTreeSet<Vec<u8>>>,
-    or_literal_prefixes: Option<BTreeSet<Vec<u8>>>,
+    and_literal_prefixes: Option<BTreeSet<BString>>,
+    or_literal_prefixes: Option<BTreeSet<BString>>,
 }
 
 impl Default for Frame {
@@ -83,7 +84,7 @@ impl Default for Frame {
 }
 
 impl Frame {
-    fn finish(self) -> Option<BTreeSet<Vec<u8>>> {
+    fn finish(self) -> Option<BTreeSet<BString>> {
         let Self {
             mut or_literal_prefixes,
             and_literal_prefixes,
@@ -214,7 +215,7 @@ impl MatcherVisitor {
         self.frames.last_mut().unwrap()
     }
 
-    pub(crate) fn finish(&mut self) -> Option<BTreeSet<Vec<u8>>> {
+    pub(crate) fn finish(&mut self) -> Option<BTreeSet<BString>> {
         let Self { frames } = self;
         let frame = match &mut frames[..] {
             [only_frame] => mem::take(only_frame),
@@ -397,15 +398,15 @@ impl MatcherVisitor {
     /// let route = PrefixRoute("/api");
     /// ```
     pub fn visit_match_starts_with(&mut self, prefix: &str) {
-        let new_prefixes = Some(BTreeSet::from([prefix.as_bytes().to_vec()]));
+        let new_prefixes = Some(BTreeSet::from([BString::from(prefix)]));
         let current = &mut self.frames.last_mut().unwrap().and_literal_prefixes;
         intersect_prefix_expansions(current, new_prefixes);
     }
 }
 
 fn union_prefixes_limited(
-    lhs: &mut Option<BTreeSet<Vec<u8>>>,
-    rhs: Option<BTreeSet<Vec<u8>>>,
+    lhs: &mut Option<BTreeSet<BString>>,
+    rhs: Option<BTreeSet<BString>>,
     max_len: usize,
 ) {
     let Some(lhs_inner) = lhs else {
@@ -447,9 +448,9 @@ fn union_prefixes_limited(
 /// [`Infallible`] bound ensures [`Some`] is never constructed — the `?` operator is used purely
 /// for control flow.
 fn intersect_prefix_expansions_into(
-    dst: &mut BTreeSet<Vec<u8>>,
-    lhs: &mut BTreeSet<Vec<u8>>,
-    rhs: &mut BTreeSet<Vec<u8>>,
+    dst: &mut BTreeSet<BString>,
+    lhs: &mut BTreeSet<BString>,
+    rhs: &mut BTreeSet<BString>,
 ) -> Option<Infallible> {
     let mut l = lhs.pop_first()?;
     let mut r = rhs.pop_first()?;
@@ -474,8 +475,8 @@ fn intersect_prefix_expansions_into(
 
 /// See [`intersect_prefix_expansions_into`] for details
 fn intersect_prefix_expansions(
-    lhs: &mut Option<BTreeSet<Vec<u8>>>,
-    rhs: Option<BTreeSet<Vec<u8>>>,
+    lhs: &mut Option<BTreeSet<BString>>,
+    rhs: Option<BTreeSet<BString>>,
 ) {
     let Some(lhs) = lhs else {
         *lhs = rhs;
@@ -490,7 +491,7 @@ fn intersect_prefix_expansions(
     *lhs = result;
 }
 
-fn extract_prefixes(hir: &Hir) -> Option<BTreeSet<Vec<u8>>> {
+fn extract_prefixes(hir: &Hir) -> Option<BTreeSet<BString>> {
     if !hir
         .properties()
         .look_set_prefix()
@@ -502,7 +503,7 @@ fn extract_prefixes(hir: &Hir) -> Option<BTreeSet<Vec<u8>>> {
     seq.literals().map(|literals| {
         literals
             .iter()
-            .map(|lit| lit.as_bytes().to_vec())
+            .map(|lit| BString::from(lit.as_bytes()))
             .collect::<BTreeSet<_>>()
     })
 }
@@ -602,12 +603,12 @@ mod tests {
 
         // Fill lhs with 60 items
         for i in 0..60 {
-            lhs.as_mut().unwrap().insert(vec![i]);
+            lhs.as_mut().unwrap().insert(BString::new(vec![i]));
         }
 
         // Fill rhs with 60 items
         for i in 60..120 {
-            rhs.insert(vec![i]);
+            rhs.insert(BString::new(vec![i]));
         }
 
         union_prefixes_limited(&mut lhs, Some(rhs), 100);
@@ -627,7 +628,7 @@ mod tests {
     fn test_intersect_prefix_expansions_lhs_none() {
         let mut lhs = None;
         let mut rhs = BTreeSet::new();
-        rhs.insert(b"/api".to_vec());
+        rhs.insert(BString::from("/api"));
         intersect_prefix_expansions(&mut lhs, Some(rhs.clone()));
         assert_eq!(lhs, Some(rhs));
     }
@@ -635,7 +636,7 @@ mod tests {
     #[test]
     fn test_intersect_prefix_expansions_rhs_none() {
         let mut lhs_set = BTreeSet::new();
-        lhs_set.insert(b"/api".to_vec());
+        lhs_set.insert(BString::from("/api"));
         let mut lhs = Some(lhs_set.clone());
         intersect_prefix_expansions(&mut lhs, None);
         // Should remain unchanged when rhs is None
@@ -646,10 +647,10 @@ mod tests {
     fn test_intersect_prefix_expansions_with_values() {
         // Test that intersect finds elements where one is a prefix of the other
         let mut lhs_set = BTreeSet::new();
-        lhs_set.insert(b"/a".to_vec());
+        lhs_set.insert(BString::from("/a"));
 
         let mut rhs_set = BTreeSet::new();
-        rhs_set.insert(b"/api".to_vec());
+        rhs_set.insert(BString::from("/api"));
 
         let mut lhs = Some(lhs_set);
         intersect_prefix_expansions(&mut lhs, Some(rhs_set));
@@ -659,15 +660,15 @@ mod tests {
         assert!(result.contains(b"/api".as_slice()));
     }
 
-    fn make_set(items: &[&str]) -> BTreeSet<Vec<u8>> {
+    fn make_set(items: &[&str]) -> BTreeSet<BString> {
         let mut result = BTreeSet::new();
-        for item in items {
-            result.insert(item.as_bytes().to_vec());
+        for &item in items {
+            result.insert(BString::from(item));
         }
         result
     }
 
-    fn run_intersect(lhs: &[&str], rhs: &[&str]) -> BTreeSet<Vec<u8>> {
+    fn run_intersect(lhs: &[&str], rhs: &[&str]) -> BTreeSet<BString> {
         let mut dst = BTreeSet::new();
         _ = intersect_prefix_expansions_into(&mut dst, &mut make_set(lhs), &mut make_set(rhs));
         dst

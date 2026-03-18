@@ -184,11 +184,10 @@ impl<K: Ord> InnerPrefilter<K> {
     /// applies `optimize_for_prefix_by_preference`, which collapses such
     /// overlapping literals). Violating this causes `remove` to trip a
     /// debug assertion.
-    pub(crate) fn insert(&mut self, key: K, prefixes: Vec<Vec<u8>>)
+    pub(crate) fn insert(&mut self, key: K, prefixes: Vec<BString>)
     where
         K: Clone,
     {
-        let prefixes: Vec<BString> = prefixes.into_iter().map(BString::new).collect();
         if let Some(old_prefixes) = self.key_to_prefixes.insert(key.clone(), prefixes.clone()) {
             for prefix in old_prefixes {
                 self.prefix_map.remove(&prefix, &key);
@@ -234,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_simple_match() {
-        let patterns = vec![b"/api/users".to_vec(), b"/api/posts".to_vec()];
+        let patterns = vec![BString::from("/api/users"), BString::from("/api/posts")];
         let mut prefilter = InnerPrefilter::new();
         for (i, pattern) in patterns.into_iter().enumerate() {
             prefilter.insert(i, vec![pattern]);
@@ -247,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_overlapping_matches() {
-        let patterns = vec![b"/api".to_vec(), b"/api/v1".to_vec()];
+        let patterns = vec![BString::from("/api"), BString::from("/api/v1")];
         let indexes = vec![0, 1];
         let mut prefilter = InnerPrefilter::new();
         for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
@@ -261,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_multiple_same_prefix() {
-        let patterns = vec![b"/api".to_vec(), b"/api".to_vec(), b"/users".to_vec()];
+        let patterns = vec![BString::from("/api"), BString::from("/api"), BString::from("/users")];
         let indexes = vec![0, 1, 2];
         let mut prefilter = InnerPrefilter::new();
         for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
@@ -277,10 +276,10 @@ mod tests {
     #[test]
     fn test_nested_prefixes() {
         let patterns = vec![
-            b"/".to_vec(),
-            b"/a".to_vec(),
-            b"/ab".to_vec(),
-            b"/abc".to_vec(),
+            BString::from("/"),
+            BString::from("/a"),
+            BString::from("/ab"),
+            BString::from("/abc"),
         ];
         let indexes = vec![0, 1, 2, 3];
         let mut prefilter = InnerPrefilter::new();
@@ -309,13 +308,13 @@ mod tests {
 
         // Add many decoy patterns
         for i in 0..100 {
-            patterns.push(format!("/decoy{:03}", i).into_bytes());
+            patterns.push(BString::from(format!("/decoy{:03}", i)));
             indexes.push(i);
         }
 
         // Add actual matching patterns
-        patterns.push(b"/".to_vec());
-        patterns.push(b"/target".to_vec());
+        patterns.push(BString::from("/"));
+        patterns.push(BString::from("/target"));
         indexes.push(1000);
         indexes.push(1001);
 
@@ -334,10 +333,10 @@ mod tests {
     fn test_common_prefix_skipping() {
         // Test that common prefix analysis works correctly
         let patterns = vec![
-            b"/".to_vec(),
-            b"/api".to_vec(),
-            b"/api/v999".to_vec(), // Won't match but helps test skipping
-            b"/other".to_vec(),
+            BString::from("/"),
+            BString::from("/api"),
+            BString::from("/api/v999"), // Won't match but helps test skipping
+            BString::from("/other"),
         ];
         let indexes = vec![0, 1, 2, 3];
         let mut prefilter = InnerPrefilter::new();
@@ -356,9 +355,9 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut prefilter = InnerPrefilter::new();
-        prefilter.insert(0, vec![b"/api".to_vec()]);
-        prefilter.insert(1, vec![b"/api/v1".to_vec()]);
-        prefilter.insert(2, vec![b"/users".to_vec()]);
+        prefilter.insert(0, vec![BString::from("/api")]);
+        prefilter.insert(1, vec![BString::from("/api/v1")]);
+        prefilter.insert(2, vec![BString::from("/users")]);
 
         assert!(!prefilter.is_empty());
         assert_eq!(prefilter.num_routes(), 3);
@@ -385,9 +384,9 @@ mod tests {
         //                                          -> "x" (key 1)
         // Removing key 1 should compact "a"+"b" into "ab" since the "b"
         // node would have no keys and one child.
-        prefilter.insert(0, vec![b"abc".to_vec()]);
-        prefilter.insert(1, vec![b"abx".to_vec()]);
-        prefilter.insert(2, vec![b"a".to_vec()]);
+        prefilter.insert(0, vec![BString::from("abc")]);
+        prefilter.insert(1, vec![BString::from("abx")]);
+        prefilter.insert(2, vec![BString::from("a")]);
 
         // Verify all match before removal
         assert!(prefilter.check(b"abc_more").contains(&0));
@@ -410,8 +409,8 @@ mod tests {
     fn test_edge_split_insert() {
         let mut prefilter = InnerPrefilter::new();
         // Insert "abcdef" then "abcxyz" — forces a split at "abc"
-        prefilter.insert(0, vec![b"abcdef".to_vec()]);
-        prefilter.insert(1, vec![b"abcxyz".to_vec()]);
+        prefilter.insert(0, vec![BString::from("abcdef")]);
+        prefilter.insert(1, vec![BString::from("abcxyz")]);
 
         assert!(prefilter.check(b"abcdef_more").contains(&0));
         assert!(prefilter.check(b"abcxyz_more").contains(&1));
@@ -419,14 +418,14 @@ mod tests {
         assert!(!prefilter.check(b"abc").contains(&1));
 
         // Insert "abc" — key at the split point itself
-        prefilter.insert(2, vec![b"abc".to_vec()]);
+        prefilter.insert(2, vec![BString::from("abc")]);
         let result = prefilter.check(b"abcdef_more");
         assert!(result.contains(&0));
         assert!(result.contains(&2));
         assert!(!result.contains(&1));
 
         // Insert "ab" — forces another split higher up
-        prefilter.insert(3, vec![b"ab".to_vec()]);
+        prefilter.insert(3, vec![BString::from("ab")]);
         let result = prefilter.check(b"abcxyz_more");
         assert!(result.contains(&1));
         assert!(result.contains(&2));
@@ -440,11 +439,11 @@ mod tests {
         assert!(prefilter.is_empty());
         assert_eq!(prefilter.num_routes(), 0);
 
-        prefilter.insert(0, vec![b"/api".to_vec()]);
+        prefilter.insert(0, vec![BString::from("/api")]);
         assert!(!prefilter.is_empty());
         assert_eq!(prefilter.num_routes(), 1);
 
-        prefilter.insert(1, vec![b"/users".to_vec()]);
+        prefilter.insert(1, vec![BString::from("/users")]);
         assert_eq!(prefilter.num_routes(), 2);
 
         prefilter.remove(&0);
