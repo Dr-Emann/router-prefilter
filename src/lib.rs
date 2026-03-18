@@ -9,6 +9,7 @@ mod inner_prefilter;
 pub mod matchers;
 
 use crate::matchers::{Matcher, MatcherVisitor};
+use bstr::BString;
 use inner_prefilter::InnerPrefilter;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, btree_set};
@@ -54,7 +55,7 @@ pub struct RouterPrefilter<K> {
     always_possible: BTreeSet<K>,
     prefilter: InnerPrefilter<K>,
 
-    matcher_visitor: MatcherVisitor,
+    builder: PrefilterBuilder,
 }
 
 impl<K: Clone> Clone for RouterPrefilter<K> {
@@ -63,7 +64,7 @@ impl<K: Clone> Clone for RouterPrefilter<K> {
             always_possible: self.always_possible.clone(),
             prefilter: self.prefilter.clone(),
 
-            matcher_visitor: MatcherVisitor::new(),
+            builder: PrefilterBuilder::new(),
         }
     }
 }
@@ -90,7 +91,7 @@ impl<K> RouterPrefilter<K> {
             always_possible: BTreeSet::new(),
             prefilter: InnerPrefilter::new(),
 
-            matcher_visitor: MatcherVisitor::new(),
+            builder: PrefilterBuilder::new(),
         }
     }
 
@@ -240,6 +241,9 @@ impl<K: Ord> RouterPrefilter<K> {
     /// The matcher is analyzed to extract literal prefixes for fast filtering.
     /// If no prefixes can be extracted, the matcher is tracked as always-possible.
     ///
+    /// This is a wrapper around [`PrefilterBuilder::compute_prefilter`]
+    /// and [`Self::insert_prefilter`]
+    ///
     /// # Examples
     ///
     /// ```
@@ -262,12 +266,54 @@ impl<K: Ord> RouterPrefilter<K> {
     where
         K: Clone,
     {
-        matcher.visit(&mut self.matcher_visitor);
-        let prefixes = self.matcher_visitor.finish();
-        if let Some(prefixes) = prefixes {
+        let match_prefilter = self.builder.compute_prefilter(matcher);
+        self.insert_prefilter(key, match_prefilter)
+    }
+
+    /// Insert an optional prefilter for a matcher with the given key.
+    ///
+    /// If `match_prefilter` is `None`, the specified key will always be returned from
+    /// [`Self::possible_matches`], otherwise, the prefilter will be used to filter matches.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use router_prefilter::{RouterPrefilter, PrefilterBuilder};
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct Route(&'static str);
+    ///
+    /// impl Matcher for Route {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_match_starts_with(self.0);
+    ///     }
+    /// }
+    ///
+    /// let mut builder = PrefilterBuilder::new();
+    /// let mut prefilter = RouterPrefilter::new();
+    ///
+    /// // Insert with a computed prefilter
+    /// let match_prefilter = builder.compute_prefilter(Route("/api"));
+    /// prefilter.insert_prefilter(0, match_prefilter);
+    ///
+    /// // Insert as always-possible (no prefilter)
+    /// prefilter.insert_prefilter(1, None);
+    ///
+    /// let matches: Vec<_> = prefilter.possible_matches("/api/v1").collect();
+    /// assert!(matches.contains(&&0));
+    /// assert!(matches.contains(&&1));
+    ///
+    /// let matches: Vec<_> = prefilter.possible_matches("/other").collect();
+    /// assert!(!matches.contains(&&0));
+    /// assert!(matches.contains(&&1));
+    /// ```
+    pub fn insert_prefilter(&mut self, key: K, match_prefilter: Option<MatchPrefilter>)
+    where
+        K: Clone,
+    {
+        if let Some(MatchPrefilter { prefixes }) = match_prefilter {
             // Clean up in case this key was previously in always_possible
             self.always_possible.remove(&key);
-            let prefixes = prefixes.into_iter().collect();
             self.prefilter.insert(key, prefixes);
         } else {
             // Clean up in case this key was previously in the prefilter
@@ -369,6 +415,202 @@ impl<K: Ord> RouterPrefilter<K> {
             ))
         };
         RouterPrefilterIter(inner)
+    }
+
+    /// Returns a mutable reference to the embedded prefilter builder.
+    ///
+    /// This can be more efficient than creating a new [`PrefilterBuilder`] every time,
+    /// as it reuses the internal allocations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use router_prefilter::RouterPrefilter;
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct Route(&'static str);
+    ///
+    /// impl Matcher for Route {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_match_starts_with(self.0);
+    ///     }
+    /// }
+    ///
+    /// let mut prefilter: RouterPrefilter<usize> = RouterPrefilter::new();
+    /// let match_prefilter = prefilter.prefilter_builder().compute_prefilter(Route("/api"));
+    /// prefilter.insert_prefilter(0, match_prefilter);
+    /// ```
+    #[must_use]
+    pub fn prefilter_builder(&mut self) -> &mut PrefilterBuilder {
+        &mut self.builder
+    }
+}
+
+/// A builder for prefilters.
+///
+/// Use when either:
+/// - Simply extracting the possible prefilters from individual matchers, without building a
+///   [router prefilter][RouterPrefilter] for many possible matchers
+/// - When more control, additional logging, etc is required than simply calling
+///   [`RouterPrefilter::insert`]
+///
+/// # Examples
+///
+/// ```
+/// use router_prefilter::PrefilterBuilder;
+/// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+///
+/// struct Route(&'static str);
+///
+/// impl Matcher for Route {
+///     fn visit(&self, visitor: &mut MatcherVisitor) {
+///         visitor.visit_match_starts_with(self.0);
+///     }
+/// }
+///
+/// let mut builder = PrefilterBuilder::new();
+/// let prefilter = builder.compute_prefilter(Route("/api"));
+/// assert!(prefilter.is_some());
+///
+/// let no_prefilter = builder.compute_prefilter(Route(""));
+/// assert!(no_prefilter.is_none());
+/// ```
+#[derive(Debug)]
+pub struct PrefilterBuilder {
+    matcher_visitor: MatcherVisitor,
+}
+
+impl Default for PrefilterBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PrefilterBuilder {
+    /// Create a new prefilter builder
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            matcher_visitor: MatcherVisitor::new(),
+        }
+    }
+
+    /// Compute a prefilter (if possible) for the given matcher.
+    ///
+    /// Returns `None` if no literal prefixes can be extracted from the matcher.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use router_prefilter::PrefilterBuilder;
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct Route(&'static str);
+    ///
+    /// impl Matcher for Route {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_match_starts_with(self.0);
+    ///     }
+    /// }
+    ///
+    /// let mut builder = PrefilterBuilder::new();
+    ///
+    /// let prefilter = builder.compute_prefilter(Route("/api")).unwrap();
+    /// let prefixes: Vec<_> = prefilter.prefixes().collect();
+    /// assert_eq!(prefixes, vec![b"/api".as_slice()]);
+    /// ```
+    #[must_use]
+    pub fn compute_prefilter<M: Matcher>(&mut self, matcher: M) -> Option<MatchPrefilter> {
+        matcher.visit(&mut self.matcher_visitor);
+        self.matcher_visitor
+            .finish()
+            .map(|prefixes| MatchPrefilter {
+                prefixes: prefixes.into_iter().collect(),
+            })
+    }
+}
+
+/// The prefilter for a single matcher.
+///
+/// A prefilter for a match consists of a collection of prefixes, at least one of which must
+/// match at the start of a string if the specified matcher would match.
+///
+/// Obtained via [`PrefilterBuilder::compute_prefilter`]. There is no public constructor;
+/// the prefilter can only be produced by analyzing a [`Matcher`].
+///
+/// See [`RouterPrefilter::insert_prefilter`] for inserting one into a router prefilter.
+///
+/// This type exists for observing the prefiltering process: e.g. debug logging of required
+/// prefixes before insertion.
+///
+/// # Examples
+///
+/// ```
+/// use router_prefilter::PrefilterBuilder;
+/// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+///
+/// struct Route(&'static str);
+///
+/// impl Matcher for Route {
+///     fn visit(&self, visitor: &mut MatcherVisitor) {
+///         visitor.visit_match_starts_with(self.0);
+///     }
+/// }
+///
+/// let mut builder = PrefilterBuilder::new();
+/// let prefilter = builder.compute_prefilter(Route("/api")).unwrap();
+/// assert_eq!(prefilter.len(), 1);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchPrefilter {
+    prefixes: Vec<BString>,
+}
+
+impl MatchPrefilter {
+    /// Returns the number of prefixes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.prefixes.len()
+    }
+
+    /// Returns `true` if there are no prefixes.
+    ///
+    /// Note: a `MatchPrefilter` produced by [`PrefilterBuilder::compute_prefilter`] always
+    /// contains at least one prefix, so this will always return `false` for such values.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.prefixes.is_empty()
+    }
+
+    /// Iterates over the prefixes for this prefilter.
+    ///
+    /// At least one of these prefixes must appear at the start of a string for the
+    /// corresponding matcher to possibly match.
+    ///
+    /// This is currently the only method of prefiltering, but callers should not rely on this:
+    /// this method is intended mainly for internal observability into the prefiltering process.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use router_prefilter::PrefilterBuilder;
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct Route(&'static str);
+    ///
+    /// impl Matcher for Route {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_match_starts_with(self.0);
+    ///     }
+    /// }
+    ///
+    /// let mut builder = PrefilterBuilder::new();
+    /// let prefilter = builder.compute_prefilter(Route("/api")).unwrap();
+    /// let prefixes: Vec<_> = prefilter.prefixes().collect();
+    /// assert_eq!(prefixes, vec![b"/api".as_slice()]);
+    /// ```
+    pub fn prefixes(&self) -> impl Iterator<Item = &[u8]> {
+        self.prefixes.iter().map(|prefix| prefix.as_slice())
     }
 }
 
@@ -836,5 +1078,96 @@ mod tests {
 
         // Empty prefix goes into always_possible, not the prefilter
         assert_eq!(prefilter.prefilterable_routes(), 10);
+    }
+
+    #[test]
+    fn test_prefilter_builder_standalone() {
+        let mut builder = PrefilterBuilder::new();
+
+        let prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let prefixes: Vec<_> = prefilter.prefixes().collect();
+        assert_eq!(prefixes, vec![b"/api".as_slice()]);
+
+        let none = builder.compute_prefilter(TestMatcher::without_prefix());
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn test_prefilter_builder_reuse() {
+        let mut builder = PrefilterBuilder::new();
+
+        let p1 = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let p2 = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        assert_eq!(p1, p2);
+
+        let p3 = builder.compute_prefilter(TestMatcher::with_prefix("/users")).unwrap();
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn test_insert_prefilter_with_prefilter() {
+        let mut builder = PrefilterBuilder::new();
+        let match_prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api"));
+
+        let mut prefilter = RouterPrefilter::new();
+        prefilter.insert_prefilter(0, match_prefilter);
+
+        let matches: Vec<_> = prefilter.possible_matches("/api/test").collect();
+        assert!(matches.contains(&&0));
+
+        let matches: Vec<_> = prefilter.possible_matches("/other").collect();
+        assert!(!matches.contains(&&0));
+    }
+
+    #[test]
+    fn test_insert_prefilter_none_is_always_possible() {
+        let mut prefilter = RouterPrefilter::new();
+        prefilter.insert_prefilter(0, None);
+
+        let matches: Vec<_> = prefilter.possible_matches("/anything").collect();
+        assert!(matches.contains(&&0));
+
+        assert_eq!(prefilter.prefilterable_routes(), 0);
+        assert_eq!(prefilter.len(), 1);
+    }
+
+    #[test]
+    fn test_prefilter_builder_accessor() {
+        let mut prefilter: RouterPrefilter<usize> = RouterPrefilter::new();
+        let match_prefilter = prefilter.prefilter_builder().compute_prefilter(TestMatcher::with_prefix("/api"));
+        prefilter.insert_prefilter(0, match_prefilter);
+
+        let matches: Vec<_> = prefilter.possible_matches("/api/test").collect();
+        assert!(matches.contains(&&0));
+    }
+
+    #[test]
+    fn test_match_prefilter_len_and_is_empty() {
+        let mut builder = PrefilterBuilder::new();
+        let prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        assert_eq!(prefilter.len(), 1);
+        assert!(!prefilter.is_empty());
+    }
+
+    #[test]
+    fn test_match_prefilter_clone_and_eq() {
+        let mut builder = PrefilterBuilder::new();
+        let prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let cloned = prefilter.clone();
+        assert_eq!(prefilter, cloned);
+    }
+
+    #[test]
+    fn test_match_prefilter_insert_twice_from_clone() {
+        let mut builder = PrefilterBuilder::new();
+        let match_prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+
+        let mut prefilter = RouterPrefilter::new();
+        prefilter.insert_prefilter(0, Some(match_prefilter.clone()));
+        prefilter.insert_prefilter(1, Some(match_prefilter));
+
+        let matches: Vec<_> = prefilter.possible_matches("/api/test").collect();
+        assert!(matches.contains(&&0));
+        assert!(matches.contains(&&1));
     }
 }
