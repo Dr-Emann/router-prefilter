@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0](https://github.com/Dr-Emann/router-prefilter/compare/v1.4.0...v1.5.0) - 2026-03-19
+
+### Added
+
+- add the ability to examine the prefixes used for prefiltering
+
+### Other
+
+- add docs about the need to balance nested_start/finish
+
 ## [1.4.0](https://github.com/Dr-Emann/router-prefilter/compare/v1.3.3...v1.4.0) - 2026-03-18
 
 ### Added
