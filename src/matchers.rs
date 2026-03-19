@@ -58,7 +58,10 @@ pub trait Matcher {
     /// Visits this matcher using the provided visitor.
     ///
     /// Implementations should call appropriate visitor methods to describe
-    /// their matching behavior.
+    /// their matching behavior. Every call to [`MatcherVisitor::visit_nested_start`]
+    /// must be balanced by a corresponding [`MatcherVisitor::visit_nested_finish`]
+    /// before `visit` returns. Unbalanced nesting will cause a panic when the
+    /// prefilter is built.
     fn visit(&self, visitor: &mut MatcherVisitor);
 }
 
@@ -212,7 +215,9 @@ impl MatcherVisitor {
     }
 
     fn current_frame(&mut self) -> &mut Frame {
-        self.frames.last_mut().unwrap()
+        self.frames
+            .last_mut()
+            .expect("mismatched nesting calls to MatcherVisitor")
     }
 
     pub(crate) fn finish(&mut self) -> Option<BTreeSet<BString>> {
@@ -756,5 +761,24 @@ mod tests {
         let prefixes = extract_prefixes(&hir);
         // Unanchored patterns should return None
         assert!(prefixes.is_none());
+    }
+
+    #[test]
+    #[should_panic = "mismatched nesting calls to MatcherVisitor"]
+    fn test_unbalanced_nesting_extra_start() {
+        let mut visitor = MatcherVisitor::new();
+        visitor.visit_nested_start();
+        visitor.visit_match_starts_with("/api");
+        // missing visit_nested_finish
+        visitor.finish();
+    }
+
+    #[test]
+    #[should_panic = "mismatched nesting calls to MatcherVisitor"]
+    fn test_unbalanced_nesting_extra_finish() {
+        let mut visitor = MatcherVisitor::new();
+        visitor.visit_match_starts_with("/api");
+        // no matching visit_nested_start
+        visitor.visit_nested_finish();
     }
 }

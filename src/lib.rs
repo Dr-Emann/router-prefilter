@@ -499,6 +499,30 @@ impl PrefilterBuilder {
     ///
     /// Returns `None` if no literal prefixes can be extracted from the matcher.
     ///
+    /// # Panics
+    ///
+    /// Panics if the matcher's [`Matcher::visit`] implementation leaves unbalanced
+    /// nesting (more calls to [`MatcherVisitor::visit_nested_start`] than
+    /// [`MatcherVisitor::visit_nested_finish`], or vice versa).
+    ///
+    /// ```should_panic
+    /// use router_prefilter::PrefilterBuilder;
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct UnbalancedMatcher;
+    ///
+    /// impl Matcher for UnbalancedMatcher {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_nested_start();
+    ///         visitor.visit_match_starts_with("/api");
+    ///         // missing visit_nested_finish
+    ///     }
+    /// }
+    ///
+    /// let mut builder = PrefilterBuilder::new();
+    /// let _ = builder.compute_prefilter(UnbalancedMatcher); // panics
+    /// ```
+    ///
     /// # Examples
     ///
     /// ```
@@ -1169,5 +1193,21 @@ mod tests {
         let matches: Vec<_> = prefilter.possible_matches("/api/test").collect();
         assert!(matches.contains(&&0));
         assert!(matches.contains(&&1));
+    }
+
+    #[test]
+    #[should_panic = "mismatched nesting calls to MatcherVisitor"]
+    fn test_compute_prefilter_panics_on_unbalanced_nesting() {
+        struct BadMatcher;
+
+        impl Matcher for BadMatcher {
+            fn visit(&self, visitor: &mut MatcherVisitor) {
+                visitor.visit_nested_start();
+                visitor.visit_match_starts_with("/api");
+            }
+        }
+
+        let mut builder = PrefilterBuilder::new();
+        let _ = builder.compute_prefilter(BadMatcher);
     }
 }
