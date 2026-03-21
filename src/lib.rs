@@ -49,9 +49,7 @@ use std::iter::FusedIterator;
 /// let matches: Vec<_> = prefilter.possible_matches("/api/posts").collect();
 /// assert!(matches.contains(&&0));
 /// ```
-#[derive(Debug)]
 pub struct RouterPrefilter<K> {
-    // Only includes indexes after prefilter starts
     always_possible: BTreeSet<K>,
     prefilter: InnerPrefilter<K>,
 
@@ -66,6 +64,27 @@ impl<K: Clone> Clone for RouterPrefilter<K> {
 
             builder: PrefilterBuilder::new(),
         }
+    }
+}
+
+impl<K: std::fmt::Debug> std::fmt::Debug for RouterPrefilter<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RouterPrefilter")
+            .field("always_possible", &self.always_possible)
+            .field("prefix_to_keys", &PrefixToKeys(&self.prefilter))
+            .finish()
+    }
+}
+
+struct PrefixToKeys<'a, K>(&'a InnerPrefilter<K>);
+
+impl<K: std::fmt::Debug> std::fmt::Debug for PrefixToKeys<'_, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+        for (prefix, keys) in self.0.iter() {
+            map.entry(&prefix, &keys);
+        }
+        map.finish()
     }
 }
 
@@ -171,6 +190,77 @@ impl<K> RouterPrefilter<K> {
     #[must_use]
     pub fn prefilterable_routes(&self) -> usize {
         self.prefilter.num_routes()
+    }
+
+    /// Returns the set of keys that are always considered possible matches.
+    ///
+    /// These are keys whose matchers had no extractable literal prefix,
+    /// so they cannot be filtered out and are returned from every call
+    /// to [`Self::possible_matches`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use router_prefilter::RouterPrefilter;
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct Route(&'static str);
+    ///
+    /// impl Matcher for Route {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_match_regex(self.0);
+    ///     }
+    /// }
+    ///
+    /// let mut prefilter = RouterPrefilter::new();
+    /// // Anchored at the start, can extract a prefix
+    /// prefilter.insert(0, Route("^/api/(abc|123|456)"));
+    /// // Not anchored, any prefix could match
+    /// prefilter.insert(1, Route("unanchored"));
+    /// // Anchored, but no prefix to extract
+    /// prefilter.insert(2, Route("^.*/abc"));
+    ///
+    /// assert_eq!(prefilter.always_possible_keys(), &BTreeSet::from([1, 2]));
+    /// ```
+    #[must_use]
+    pub fn always_possible_keys(&self) -> &BTreeSet<K> {
+        &self.always_possible
+    }
+
+    /// Returns an iterator over each prefix and the keys registered under it.
+    ///
+    /// Returns an iterator over the prefixes used for prefiltering.
+    ///
+    /// Walks the internal prefix trie, yielding each distinct prefix as an
+    /// owned [`Vec<u8>`]. Only includes prefixes from keys with extractable
+    /// literal prefixes, not always-possible keys. The order of prefixes is
+    /// not guaranteed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use router_prefilter::RouterPrefilter;
+    /// use router_prefilter::matchers::{Matcher, MatcherVisitor};
+    ///
+    /// struct Route(&'static str);
+    ///
+    /// impl Matcher for Route {
+    ///     fn visit(&self, visitor: &mut MatcherVisitor) {
+    ///         visitor.visit_match_starts_with(self.0);
+    ///     }
+    /// }
+    ///
+    /// let mut prefilter = RouterPrefilter::new();
+    /// prefilter.insert(0, Route("/api"));
+    /// prefilter.insert(1, Route("/users"));
+    ///
+    /// let mut prefixes: Vec<Vec<u8>> = prefilter.prefixes().collect();
+    /// prefixes.sort();
+    /// assert_eq!(prefixes, [b"/api".to_vec(), b"/users".to_vec()]);
+    /// ```
+    pub fn prefixes(&self) -> impl Iterator<Item = Vec<u8>> + '_ {
+        self.prefilter.iter().map(|(prefix, _keys)| prefix.into())
     }
 }
 
@@ -1209,5 +1299,45 @@ mod tests {
 
         let mut builder = PrefilterBuilder::new();
         let _ = builder.compute_prefilter(BadMatcher);
+    }
+
+    #[test]
+    fn test_always_possible_keys() {
+        let mut prefilter = RouterPrefilter::new();
+        assert!(prefilter.always_possible_keys().is_empty());
+
+        prefilter.insert(0, TestMatcher::without_prefix());
+        prefilter.insert(1, TestMatcher::with_prefix("/api"));
+        prefilter.insert(2, TestMatcher::without_prefix());
+
+        let always = prefilter.always_possible_keys();
+        assert_eq!(always.len(), 2);
+        assert!(always.contains(&0));
+        assert!(always.contains(&2));
+        assert!(!always.contains(&1));
+    }
+
+    #[test]
+    fn test_prefixes() {
+        let mut prefilter: RouterPrefilter<usize> = RouterPrefilter::new();
+        assert_eq!(prefilter.prefixes().count(), 0);
+
+        prefilter.insert(0, TestMatcher::with_prefix("/api"));
+        prefilter.insert(1, TestMatcher::without_prefix());
+        prefilter.insert(2, TestMatcher::with_prefix("/users"));
+
+        let mut prefixes: Vec<Vec<u8>> = prefilter.prefixes().collect();
+        prefixes.sort();
+        assert_eq!(prefixes, [b"/api".to_vec(), b"/users".to_vec()]);
+    }
+
+    #[test]
+    fn test_debug_output() {
+        let mut prefilter = RouterPrefilter::new();
+        prefilter.insert(0, TestMatcher::with_prefix("/api"));
+        prefilter.insert(1, TestMatcher::without_prefix());
+
+        let debug = format!("{:?}", prefilter);
+        assert_eq!(debug, r#"RouterPrefilter { always_possible: {1}, prefix_to_keys: {"/api": {0}} }"#);
     }
 }
