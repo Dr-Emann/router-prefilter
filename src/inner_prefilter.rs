@@ -221,6 +221,76 @@ impl<K: Ord> InnerPrefilter<K> {
     }
 }
 
+impl<K> InnerPrefilter<K> {
+    pub(crate) fn iter(&self) -> TrieIter<'_, K> {
+        TrieIter::new(&self.prefix_map)
+    }
+}
+
+pub(crate) struct TrieIter<'a, K> {
+    stack: Vec<TrieIterFrame<'a, K>>,
+    prefix: BString,
+}
+
+impl<'a, K> TrieIter<'a, K> {
+    fn new(root: &'a RadixTrie<K>) -> Self {
+        let RadixTrie { keys, children } = root;
+        Self {
+            stack: vec![TrieIterFrame {
+                keys: Some(keys),
+                children,
+                prefix_len: 0,
+            }],
+            prefix: BString::default(),
+        }
+    }
+}
+
+struct TrieIterFrame<'a, K> {
+    keys: Option<&'a BTreeSet<K>>,
+    children: &'a [RadixLink<K>],
+    // Length of the prefix up but not including this frame.
+    prefix_len: usize,
+}
+
+impl<'a, K> Iterator for TrieIter<'a, K> {
+    type Item = (BString, &'a BTreeSet<K>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let frame = self.stack.last_mut()?;
+
+            if let Some(keys) = frame.keys.take()
+                && !keys.is_empty()
+            {
+                return Some((self.prefix.clone(), keys));
+            }
+
+            let Some(first) = frame.children.split_off_first() else {
+                let frame = self.stack.pop().unwrap();
+                self.prefix.truncate(frame.prefix_len);
+                continue;
+            };
+
+            let RadixLink {
+                ch,
+                rest,
+                child: RadixTrie { keys, children },
+            } = first;
+            let prefix_len = self.prefix.len();
+            self.prefix.reserve(1 + rest.len());
+            self.prefix.push(*ch);
+            self.prefix.extend_from_slice(rest);
+
+            self.stack.push(TrieIterFrame {
+                keys: Some(keys),
+                children,
+                prefix_len,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,7 +330,11 @@ mod tests {
 
     #[test]
     fn test_multiple_same_prefix() {
-        let patterns = vec![BString::from("/api"), BString::from("/api"), BString::from("/users")];
+        let patterns = vec![
+            BString::from("/api"),
+            BString::from("/api"),
+            BString::from("/users"),
+        ];
         let indexes = vec![0, 1, 2];
         let mut prefilter = InnerPrefilter::new();
         for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
