@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/Dr-Emann/router-prefilter/compare/v1.5.0...v1.6.0) - 2026-03-22
+
+### Added
+
+- always_possible_keys() and prefixes()
+
 ## [1.5.0](https://github.com/Dr-Emann/router-prefilter/compare/v1.4.0...v1.5.0) - 2026-03-19
 
 ### Added
