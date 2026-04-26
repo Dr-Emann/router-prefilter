@@ -319,7 +319,7 @@ mod tests {
         let patterns = vec![BString::from("/api"), BString::from("/api/v1")];
         let indexes = vec![0, 1];
         let mut prefilter = InnerPrefilter::new();
-        for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
+        for (index, pattern) in indexes.into_iter().zip(patterns) {
             prefilter.insert(index, vec![pattern]);
         }
 
@@ -337,7 +337,7 @@ mod tests {
         ];
         let indexes = vec![0, 1, 2];
         let mut prefilter = InnerPrefilter::new();
-        for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
+        for (index, pattern) in indexes.into_iter().zip(patterns) {
             prefilter.insert(index, vec![pattern]);
         }
 
@@ -357,7 +357,7 @@ mod tests {
         ];
         let indexes = vec![0, 1, 2, 3];
         let mut prefilter = InnerPrefilter::new();
-        for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
+        for (index, pattern) in indexes.into_iter().zip(patterns) {
             prefilter.insert(index, vec![pattern]);
         }
 
@@ -393,7 +393,7 @@ mod tests {
         indexes.push(1001);
 
         let mut prefilter = InnerPrefilter::new();
-        for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
+        for (index, pattern) in indexes.into_iter().zip(patterns) {
             prefilter.insert(index, vec![pattern]);
         }
         let result = prefilter.check(b"/target/resource");
@@ -414,7 +414,7 @@ mod tests {
         ];
         let indexes = vec![0, 1, 2, 3];
         let mut prefilter = InnerPrefilter::new();
-        for (index, pattern) in indexes.into_iter().zip(patterns.into_iter()) {
+        for (index, pattern) in indexes.into_iter().zip(patterns) {
             prefilter.insert(index, vec![pattern]);
         }
 

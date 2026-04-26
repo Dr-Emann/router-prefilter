@@ -833,7 +833,7 @@ impl<'a, K: Ord> Iterator for UnionIter<'a, K> {
         }
         match (always_next, filtered_next) {
             (Some(a), Some(f)) => {
-                let (returned, next_peeked) = match a.cmp(&f) {
+                let (returned, next_peeked) = match a.cmp(f) {
                     Ordering::Less => (a, Peeked::Filtered(f)),
                     Ordering::Greater => (f, Peeked::Always(a)),
                     Ordering::Equal => {
