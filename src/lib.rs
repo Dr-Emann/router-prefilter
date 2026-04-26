@@ -1198,7 +1198,9 @@ mod tests {
     fn test_prefilter_builder_standalone() {
         let mut builder = PrefilterBuilder::new();
 
-        let prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let prefilter = builder
+            .compute_prefilter(TestMatcher::with_prefix("/api"))
+            .unwrap();
         let prefixes: Vec<_> = prefilter.prefixes().collect();
         assert_eq!(prefixes, vec![b"/api".as_slice()]);
 
@@ -1210,11 +1212,17 @@ mod tests {
     fn test_prefilter_builder_reuse() {
         let mut builder = PrefilterBuilder::new();
 
-        let p1 = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
-        let p2 = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let p1 = builder
+            .compute_prefilter(TestMatcher::with_prefix("/api"))
+            .unwrap();
+        let p2 = builder
+            .compute_prefilter(TestMatcher::with_prefix("/api"))
+            .unwrap();
         assert_eq!(p1, p2);
 
-        let p3 = builder.compute_prefilter(TestMatcher::with_prefix("/users")).unwrap();
+        let p3 = builder
+            .compute_prefilter(TestMatcher::with_prefix("/users"))
+            .unwrap();
         assert_ne!(p1, p3);
     }
 
@@ -1248,7 +1256,9 @@ mod tests {
     #[test]
     fn test_prefilter_builder_accessor() {
         let mut prefilter: RouterPrefilter<usize> = RouterPrefilter::new();
-        let match_prefilter = prefilter.prefilter_builder().compute_prefilter(TestMatcher::with_prefix("/api"));
+        let match_prefilter = prefilter
+            .prefilter_builder()
+            .compute_prefilter(TestMatcher::with_prefix("/api"));
         prefilter.insert_prefilter(0, match_prefilter);
 
         let matches: Vec<_> = prefilter.possible_matches("/api/test").collect();
@@ -1258,7 +1268,9 @@ mod tests {
     #[test]
     fn test_match_prefilter_len_and_is_empty() {
         let mut builder = PrefilterBuilder::new();
-        let prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let prefilter = builder
+            .compute_prefilter(TestMatcher::with_prefix("/api"))
+            .unwrap();
         assert_eq!(prefilter.len(), 1);
         assert!(!prefilter.is_empty());
     }
@@ -1266,7 +1278,9 @@ mod tests {
     #[test]
     fn test_match_prefilter_clone_and_eq() {
         let mut builder = PrefilterBuilder::new();
-        let prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let prefilter = builder
+            .compute_prefilter(TestMatcher::with_prefix("/api"))
+            .unwrap();
         let cloned = prefilter.clone();
         assert_eq!(prefilter, cloned);
     }
@@ -1274,7 +1288,9 @@ mod tests {
     #[test]
     fn test_match_prefilter_insert_twice_from_clone() {
         let mut builder = PrefilterBuilder::new();
-        let match_prefilter = builder.compute_prefilter(TestMatcher::with_prefix("/api")).unwrap();
+        let match_prefilter = builder
+            .compute_prefilter(TestMatcher::with_prefix("/api"))
+            .unwrap();
 
         let mut prefilter = RouterPrefilter::new();
         prefilter.insert_prefilter(0, Some(match_prefilter.clone()));
@@ -1338,6 +1354,9 @@ mod tests {
         prefilter.insert(1, TestMatcher::without_prefix());
 
         let debug = format!("{:?}", prefilter);
-        assert_eq!(debug, r#"RouterPrefilter { always_possible: {1}, prefix_to_keys: {"/api": {0}} }"#);
+        assert_eq!(
+            debug,
+            r#"RouterPrefilter { always_possible: {1}, prefix_to_keys: {"/api": {0}} }"#
+        );
     }
 }

@@ -25,11 +25,11 @@
 //! }
 //! ```
 
+use bstr::BString;
 use regex_syntax::hir::{Hir, literal};
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::mem;
-use bstr::BString;
 
 /// Describes a pattern matcher that can be analyzed for prefix extraction.
 ///
@@ -341,6 +341,9 @@ impl MatcherVisitor {
     /// Parses the regex and extracts any literal prefixes that can be used
     /// for prefiltering. Only anchored patterns yield extractable prefixes.
     ///
+    /// If the passed regex is invalid, it is ignored (it acts the same as the regex "": it is
+    /// treated as possibly always matching)
+    ///
     /// # Examples
     ///
     /// ```
@@ -357,7 +360,9 @@ impl MatcherVisitor {
     /// let route = RegexRoute("^/api/.*");
     /// ```
     pub fn visit_match_regex(&mut self, regex: &str) {
-        let hir = regex_syntax::parse(regex).unwrap_or_else(|_| Hir::fail());
+        let Ok(hir) = regex_syntax::parse(regex) else {
+            return;
+        };
         let current = &mut self.frames.last_mut().unwrap().and_literal_prefixes;
         let new_prefixes = extract_prefixes(&hir);
         intersect_prefix_expansions(current, new_prefixes);
@@ -540,8 +545,7 @@ mod tests {
         let mut visitor = MatcherVisitor::new();
         visitor.visit_match_regex(r"^/api/.*");
         let prefixes = visitor.finish().unwrap();
-        assert_eq!(prefixes.len(), 1);
-        assert!(prefixes.contains(b"/api/".as_slice()));
+        assert_eq!(prefixes, make_set(&["/api/"]));
     }
 
     #[test]
@@ -557,8 +561,7 @@ mod tests {
         let mut visitor = MatcherVisitor::new();
         visitor.visit_match_equals("/api/users");
         let prefixes = visitor.finish().unwrap();
-        assert_eq!(prefixes.len(), 1);
-        assert!(prefixes.contains(b"/api/users".as_slice()));
+        assert_eq!(prefixes, make_set(&["/api/users"]));
     }
 
     #[test]
@@ -568,8 +571,7 @@ mod tests {
         visitor.visit_match_starts_with("/api");
         visitor.visit_nested_finish();
         let prefixes = visitor.finish().unwrap();
-        assert_eq!(prefixes.len(), 1);
-        assert!(prefixes.contains(b"/api".as_slice()));
+        assert_eq!(prefixes, make_set(&["/api"]));
     }
 
     #[test]
@@ -579,9 +581,7 @@ mod tests {
         visitor.visit_or_in();
         visitor.visit_match_starts_with("/v2");
         let prefixes = visitor.finish().unwrap();
-        assert_eq!(prefixes.len(), 2);
-        assert!(prefixes.contains(b"/v1".as_slice()));
-        assert!(prefixes.contains(b"/v2".as_slice()));
+        assert_eq!(prefixes, make_set(&["/v1", "/v2"]));
     }
 
     #[test]
@@ -595,10 +595,7 @@ mod tests {
         visitor.visit_match_starts_with("/v2");
         visitor.visit_nested_finish();
         let prefixes = visitor.finish().unwrap();
-        // Should have /v1 and /v2 (both start with /v)
-        assert_eq!(prefixes.len(), 2);
-        assert!(prefixes.contains(b"/v1".as_slice()));
-        assert!(prefixes.contains(b"/v2".as_slice()));
+        assert_eq!(prefixes, make_set(&["/v1", "/v2"]));
     }
 
     #[test]
@@ -660,9 +657,8 @@ mod tests {
         let mut lhs = Some(lhs_set);
         intersect_prefix_expansions(&mut lhs, Some(rhs_set));
 
-        // /a is a prefix of /api, so /api should be in the result
         let result = lhs.unwrap();
-        assert!(result.contains(b"/api".as_slice()));
+        assert_eq!(result, make_set(&["/api"]));
     }
 
     fn make_set(items: &[&str]) -> BTreeSet<BString> {
@@ -751,16 +747,87 @@ mod tests {
         let hir = regex_syntax::parse(r"^/api/.*").unwrap();
         let prefixes = extract_prefixes(&hir);
         assert!(prefixes.is_some());
-        let prefixes = prefixes.unwrap();
-        assert!(prefixes.contains(b"/api/".as_slice()));
+        assert_eq!(prefixes.unwrap(), make_set(&["/api/"]));
     }
 
     #[test]
     fn test_extract_prefixes_unanchored() {
         let hir = regex_syntax::parse(r"/api/.*").unwrap();
         let prefixes = extract_prefixes(&hir);
-        // Unanchored patterns should return None
         assert!(prefixes.is_none());
+    }
+
+    #[test]
+    fn test_extract_prefixes_alternation_with_literal_suffix() {
+        let hir = regex_syntax::parse(r"^(a|b)123[^/]*").unwrap();
+        assert_eq!(extract_prefixes(&hir).unwrap(), make_set(&["a123", "b123"]));
+    }
+
+    #[test]
+    fn test_extract_prefixes_character_class_with_literal_suffix() {
+        let hir = regex_syntax::parse(r"^[a-c]123.*").unwrap();
+        assert_eq!(
+            extract_prefixes(&hir).unwrap(),
+            make_set(&["a123", "b123", "c123"])
+        );
+    }
+
+    #[test]
+    fn test_extract_prefixes_multiline_anchor() {
+        let hir = regex_syntax::parse(r"(?m)^foo").unwrap();
+        // (?m)^ anchors to start-of-line, not start-of-haystack
+        assert!(extract_prefixes(&hir).is_none());
+    }
+
+    #[test]
+    fn test_extract_prefixes_explicit_haystack_anchor() {
+        let hir = regex_syntax::parse(r"\Afoo").unwrap();
+        assert_eq!(extract_prefixes(&hir).unwrap(), make_set(&["foo"]));
+    }
+
+    #[test]
+    fn test_visit_match_regex_bare_anchor_yields_no_prefixes() {
+        let mut visitor = MatcherVisitor::new();
+        visitor.visit_match_regex("^");
+        // ^ yields an empty-string prefix, which Frame::finish discards as useless
+        assert!(visitor.finish().is_none());
+    }
+
+    #[test]
+    fn test_extract_prefixes_bare_anchor() {
+        let hir = regex_syntax::parse(r"^").unwrap();
+        // The extractor yields a single empty-string literal; Frame::finish discards empty prefixes
+        assert_eq!(extract_prefixes(&hir), Some(make_set(&[""])));
+    }
+
+    #[test]
+    fn test_extract_prefixes_anchored_alternation() {
+        let hir = regex_syntax::parse(r"^(foo|bar)").unwrap();
+        let prefixes = extract_prefixes(&hir).unwrap();
+        assert_eq!(prefixes, make_set(&["bar", "foo"]));
+    }
+
+    #[test]
+    fn test_visit_match_regex_invalid_is_ignored() {
+        let mut visitor = MatcherVisitor::new();
+        visitor.visit_match_starts_with("/api");
+        visitor.visit_match_regex("[invalid");
+        let prefixes = visitor.finish().unwrap();
+        assert_eq!(prefixes, make_set(&["/api"]));
+    }
+
+    #[test]
+    fn test_extract_prefixes_literal_after_wildcard_not_extracted() {
+        let hir = regex_syntax::parse(r"^a.*abc123456").unwrap();
+        let prefixes = extract_prefixes(&hir).unwrap();
+        assert_eq!(prefixes, make_set(&["a"]));
+    }
+
+    #[test]
+    fn test_extract_prefixes_dot_prefix_not_extractable() {
+        let hir = regex_syntax::parse(r"^.abc1234").unwrap();
+        // `.` at the start matches any byte, so no literal prefix is extractable
+        assert!(extract_prefixes(&hir).is_none());
     }
 
     #[test]
