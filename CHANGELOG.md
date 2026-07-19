@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0](https://github.com/Dr-Emann/router-prefilter/compare/v1.6.1...v1.7.0)
+
+### Features
+
+
+- Changes introduced by kong's fork - ([ddd033c](https://github.com/Dr-Emann/router-prefilter/commit/ddd033cca273049579c3ed202404f60f909d2eca))
+
+### Bug Fixes
+
+
+- *(prefilter)* Work with rust 1.85 - ([358f2e4](https://github.com/Dr-Emann/router-prefilter/commit/358f2e40f1114cd2cb1e12ac2720606ef4e2b802))
+
+### Refactor
+
+
+- Move children to a struct-of-arrays format for radix tree - ([a91de4a](https://github.com/Dr-Emann/router-prefilter/commit/a91de4a36266dbff88d76466dca47e340c43f83e))
+
+### Testing
+
+
+- Fix doctests for tests in router_prefilter subcrate - ([7b7ae46](https://github.com/Dr-Emann/router-prefilter/commit/7b7ae460666f464b6c4915c5c59d718446df1c47))
+
+### Miscellaneous Tasks
+
+
+- *(build)* Use rust-toolchain.toml matching kong's MSRV - ([025bf3e](https://github.com/Dr-Emann/router-prefilter/commit/025bf3e2d6d494062bb0d7b726c6ddf37e9b2d99))
+- Cargo fmt - ([6bda0f6](https://github.com/Dr-Emann/router-prefilter/commit/6bda0f680d82c777c545e5dd60e3cd292c479744))
+
+
 ## [1.6.1](https://github.com/Dr-Emann/router-prefilter/compare/v1.6.0...v1.6.1)
 
 ### Refactor
